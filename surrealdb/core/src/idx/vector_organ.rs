@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context as _, Result};
 use segment::data_types::query_context::QueryContext;
@@ -31,12 +31,25 @@ use segment::types::{
     Distance, ExtendedPointId, Indexes, Payload, PayloadStorageType, SegmentConfig, VectorDataConfig,
     VectorStorageType, WithPayload, WithVector,
 };
-use segment_common::counter::hardware_accumulator::HwMeasurementAcc;
-use segment_common::counter::hardware_counter::HardwareCounterCell;
+use segment_common::counter::hardware_accumulator::{HwMeasurementAcc, HwSharedDrain};
 use uuid::Uuid;
 
 /// The payload key under which each point stores its originating SurrealDB record id (read back on search).
 const RID_KEY: &str = "rid";
+
+/// Captured hardware/usage signals for one organ (CLEAR SIGNALS — the segment's own CPU/IO measurement,
+/// which the consuming clyffy layer drains into `metrics.recall_evals` alongside the funnel's StageSignals).
+#[derive(Debug, Clone, Copy)]
+pub struct VectorOrganStats {
+    /// Live point count in the segment.
+    pub points: usize,
+    /// Cumulative CPU units measured across all ops on this organ.
+    pub cpu: usize,
+    /// Cumulative vector-storage IO read units.
+    pub vector_io_read: usize,
+    /// Cumulative vector-storage IO write units.
+    pub vector_io_write: usize,
+}
 
 /// A TotalRecall `segment` serving one connectome vector index. Appendable Plain/exact cosine; persistent
 /// (load-or-build under `dir`, flush on drop).
@@ -47,6 +60,10 @@ pub struct VectorOrgan {
     seq: AtomicU64,
     /// Vector dimension (fixed at open; every upsert must match).
     dim: usize,
+    /// Organ-lifetime hardware-measurement accumulator. Every upsert/search hands the segment a counter cell
+    /// tied to this (drains on drop) — so the engine's CPU/IO cost is CAPTURED, not discarded. Exposed via
+    /// `stats()` for the consumer to persist. HwMeasurementAcc is a cheap Arc-shared drain.
+    hw: HwMeasurementAcc,
 }
 
 impl VectorOrgan {
@@ -82,7 +99,25 @@ impl VectorOrgan {
         };
         // Seed the op counter PAST the loaded version, else reloaded points decline new writes.
         let seq = AtomicU64::new(seg.version() + 1);
-        Ok(Self { seg: Mutex::new(seg), seq, dim })
+        // Un-gated capturing accumulator (`new()`/`Default` are `testing`-gated). Cells `accumulate` into
+        // `request_drain`, which `get_cpu()`/`get_vector_io_*()` read — so op cost is captured.
+        let hw = HwMeasurementAcc::new_with_metrics_drain(Arc::new(HwSharedDrain::default()));
+        Ok(Self { seg: Mutex::new(seg), seq, dim, hw })
+    }
+
+    /// Captured usage signals (CLEAR SIGNALS): live point count + cumulative CPU/IO measured by the segment
+    /// engine across this organ's ops. The consumer persists these to the warehouse.
+    ///
+    /// # Errors
+    /// On lock poison.
+    pub fn stats(&self) -> Result<VectorOrganStats> {
+        let seg = self.seg.lock().map_err(|e| anyhow::anyhow!("vector-organ lock: {e}"))?;
+        Ok(VectorOrganStats {
+            points: seg.available_point_count(),
+            cpu: self.hw.get_cpu(),
+            vector_io_read: self.hw.get_vector_io_read(),
+            vector_io_write: self.hw.get_vector_io_write(),
+        })
     }
 
     /// Reload the first valid persisted segment under `dir` (if any).
@@ -117,6 +152,7 @@ impl VectorOrgan {
     ///
     /// # Errors
     /// On dimension mismatch, lock poison, or a segment write failure.
+    #[tracing::instrument(level = "debug", name = "vector_organ.upsert", skip_all, fields(rid = rid, dim = self.dim), err)]
     pub fn upsert(&self, rid: &str, vector: &[f32]) -> Result<()> {
         anyhow::ensure!(
             vector.len() == self.dim,
@@ -130,7 +166,8 @@ impl VectorOrgan {
         map.insert(RID_KEY.to_string(), serde_json::Value::String(rid.to_string()));
         let pl = Payload(map);
 
-        let hw = HardwareCounterCell::disposable();
+        // Counter cell tied to the organ's accumulator: the segment's CPU/IO cost drains in on drop (CAPTURED).
+        let hw = self.hw.get_counter_cell();
         let op_vec = self.seq.fetch_add(1, Ordering::SeqCst);
         let op_pl = self.seq.fetch_add(1, Ordering::SeqCst);
         let mut seg = self.seg.lock().map_err(|e| anyhow::anyhow!("vector-organ lock: {e}"))?;
@@ -143,9 +180,10 @@ impl VectorOrgan {
     ///
     /// # Errors
     /// On lock poison or a segment delete failure.
+    #[tracing::instrument(level = "debug", name = "vector_organ.delete", skip_all, fields(rid = rid), err)]
     pub fn delete(&self, rid: &str) -> Result<()> {
         let point = Self::point_id(rid);
-        let hw = HardwareCounterCell::disposable();
+        let hw = self.hw.get_counter_cell();
         let op = self.seq.fetch_add(1, Ordering::SeqCst);
         let mut seg = self.seg.lock().map_err(|e| anyhow::anyhow!("vector-organ lock: {e}"))?;
         seg.delete_point(op, point, &hw).context("vector-organ delete_point")?;
@@ -156,9 +194,11 @@ impl VectorOrgan {
     ///
     /// # Errors
     /// On lock poison or a segment search failure.
+    #[tracing::instrument(level = "debug", name = "vector_organ.search", skip_all, fields(k = k, dim = self.dim, hits = tracing::field::Empty), err)]
     pub fn search(&self, vector: &[f32], k: usize) -> Result<Vec<(String, f32)>> {
         let qv: QueryVector = vector.to_vec().into();
-        let ctx = QueryContext::new(usize::MAX, HwMeasurementAcc::disposable());
+        // Real accumulator (not disposable): search CPU/IO cost drains into the organ's stats.
+        let ctx = QueryContext::new(usize::MAX, self.hw.clone());
         let sqc = ctx.get_segment_query_context();
         let seg = self.seg.lock().map_err(|e| anyhow::anyhow!("vector-organ lock: {e}"))?;
         let mut batches = seg
@@ -174,7 +214,7 @@ impl VectorOrgan {
             )
             .context("vector-organ search_batch")?;
         let scored = batches.drain(..).next().unwrap_or_default();
-        Ok(scored
+        let hits: Vec<(String, f32)> = scored
             .into_iter()
             .map(|sp| {
                 let rid = sp
@@ -186,7 +226,9 @@ impl VectorOrgan {
                     .to_string();
                 (rid, sp.score)
             })
-            .collect())
+            .collect();
+        tracing::Span::current().record("hits", hits.len());
+        Ok(hits)
     }
 
     /// Flush to disk so `open` reloads the latest state (called on drop; exposed for the compaction flush).
@@ -233,6 +275,11 @@ mod tests {
             organ.upsert("rec:a", &[1.0, 0.0, 0.0, 0.0]).expect("re-upsert a");
             let again = organ.search(&[1.0, 0.0, 0.0, 0.0], 5).expect("search");
             assert_eq!(again.iter().filter(|(r, _)| r == "rec:a").count(), 1, "no duplicate point");
+
+            // CLEAR SIGNALS: the segment's CPU/IO cost is captured, not discarded.
+            let stats = organ.stats().expect("stats");
+            assert_eq!(stats.points, 2, "stats report live point count");
+            assert!(stats.cpu > 0, "hardware CPU cost captured across ops (was discarded before)");
         } // drop → flush
 
         // reopen the SAME dir → data survives

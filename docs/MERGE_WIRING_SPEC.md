@@ -61,6 +61,23 @@ design — no 2PC, no new distributed invariant.** This is the load-bearing insi
   deterministic fn of `RecordIdKey`, mirroring the `!hd/!hi` doc-id maps) so a redo after a crashed
   compaction is harmless.
 
+## CLEAR SIGNALS requirement (operator non-negotiable — applies to EVERY increment)
+
+The engine wiring must not be correct-but-silent. Each increment emits clear signals so the fused engine is
+observable in DevPulse/analytics on the SAME yardstick as the current funnel. Gate condition on all increments:
+- **Capture, don't discard, the segment's `HardwareCounterCell`** — TotalRecall measures CPU/IO per
+  upsert/search; feed it into a real metric instead of `HardwareCounterCell::disposable()`.
+- **Tracing spans** (`#[tracing::instrument]` per conventions) on build/upsert/delete/search: latency,
+  point count, segment size on disk, dim.
+- **Tie into the existing signal spine** — the KNN reroute (increment 2) emits the same per-stage
+  `StageSignal` the funnel uses (`clyffy-connectome/recall.rs` → `SignalSink`), so fused-engine recalls land
+  in the warehouse with provenance + CIs like every eval row (`metrics.recall_evals` discipline: no number
+  without its CI; overlapping-CI winners are TIED).
+- Print-only is a violation; warehouse-persist or emit a signal.
+
+(Status 2026-07-11: increment 1 landed correct-but-SILENT — it disposes the hw counter and emits no spans.
+Retrofit its instrumentation as part of this requirement.)
+
 ## Implementation sequence (increments, each independently checkable)
 1. **Segment lifecycle module** (`idx/vector_organ.rs` grows): open/create a segment at the FS dir for a
    given `(ns,db,table,index_id)` + `HnswParams`→SegmentConfig; the process-local cache mirroring
