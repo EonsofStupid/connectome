@@ -78,6 +78,15 @@ observable in DevPulse/analytics on the SAME yardstick as the current funnel. Ga
 (Status 2026-07-11: increment 1 landed correct-but-SILENT — it disposes the hw counter and emits no spans.
 Retrofit its instrumentation as part of this requirement.)
 
+## Coupling finding (2026-07-11, during increment 2)
+
+Increments 2 (KNN reroute) and 4 (DEFINE INDEX build) both **fetch the organ at runtime through a shared
+`VectorOrganStore`** (mirrors `IndexStores::get_index_hnsw`) — so that store is the foundation and was built
+first (done: `store_caches_by_index_identity`). Consequence: a *first end-to-end* KNN-through-segment can't
+be tested by the reroute alone — it needs an index that (a) DEFINE INDEX builds a segment for and (b) is
+populated. So the practical landing groups **IndexStores integration + KnnScan reroute (2) + a minimal
+DEFINE INDEX build (4)** into one end-to-end milestone, then the write-path (3) and persistence (5) harden it.
+
 ## Implementation sequence (increments, each independently checkable)
 1. **Segment lifecycle module** (`idx/vector_organ.rs` grows): open/create a segment at the FS dir for a
    given `(ns,db,table,index_id)` + `HnswParams`→SegmentConfig; the process-local cache mirroring
