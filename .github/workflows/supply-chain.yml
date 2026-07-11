@@ -1,0 +1,108 @@
+name: Supply chain security
+
+run-name: "Supply chain security run '${{ github.head_ref || github.ref_name }}'"
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - surrealdb/core/Cargo.toml
+      - surrealdb/server/Cargo.toml
+      - surrealdb/Cargo.toml
+      - build.rs
+      - surrealdb/build.rs
+      - supply-chain/audits.toml
+      - supply-chain/config.toml
+      - supply-chain/imports.lock
+      - .github/workflows/supply-chain.yml
+    branches:
+      - main
+  pull_request:
+    paths:
+      - Cargo.lock
+      - Cargo.toml
+      - surrealdb/core/Cargo.toml
+      - surrealdb/server/Cargo.toml
+      - surrealdb/Cargo.toml
+      - build.rs
+      - surrealdb/build.rs
+      - supply-chain/audits.toml
+      - supply-chain/config.toml
+      - supply-chain/imports.lock
+      - .github/workflows/supply-chain.yml
+  merge_group:
+
+concurrency:
+  # Use github.run_id on main branch
+  # Use github.event.pull_request.number on pull requests, so it's unique per pull request
+  # Use github.ref on other branches, so it's unique per branch
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: Check dependencies for known issues
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # (Actions must be pinned by commit hash) v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          components: rustfmt
+
+      - name: Install cargo-deny
+        run: cargo install --debug --locked cargo-deny@0.19.4
+
+      - name: Check dependencies for known issues
+        run: cargo deny check
+
+      - name: Dependency check failure
+        if: failure()
+        run: |
+          echo "## :warning: Supply chain security check failed" >> $GITHUB_STEP_SUMMARY
+          echo "See instructions in the [supply chain security process](https://github.com/surrealdb/surrealdb/blob/main/supply-chain/README.md#Process)." >> $GITHUB_STEP_SUMMARY
+
+  cargo-vet:
+    name: Check dependencies for untrusted sources
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # (Actions must be pinned by commit hash) v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          components: rustfmt
+
+      - name: Install cargo-vet
+        run: cargo install --debug --locked cargo-vet
+
+      - name: Check dependencies for untrusted sources
+        run: cargo vet check
+
+      - name: Dependency check failure
+        if: failure()
+        run: |
+          echo "## :warning: Supply chain security check failed" >> $GITHUB_STEP_SUMMARY
+          echo "See instructions in the [supply chain security process](https://github.com/surrealdb/surrealdb/blob/main/supply-chain/README.md#Process)." >> $GITHUB_STEP_SUMMARY

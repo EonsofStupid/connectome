@@ -1,0 +1,68 @@
+# -----------------------------------
+# OS X
+# -----------------------------------
+
+# Directory files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnail files
+._*
+
+# Files that might appear on external disk
+.Spotlight-V100
+.Trashes
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# -----------------------------------
+# Files
+# -----------------------------------
+
+**/*.rs.bk
+*.db
+*.skv
+*.sw?
+*.skv
+*.profraw
+*lcov.info
+
+# -----------------------------------
+# Folders
+# -----------------------------------
+
+/target/
+/lib/cache/
+/lib/store/
+/lib/target/
+/tests/sdk/*/Cargo.lock
+/tests/sdk/*/target
+/.github/scripts/__pycache__/
+
+.idea/
+.vscode/
+.cursor/plans/
+/result
+/bin/
+/.direnv/
+
+# -----------------------------------
+# Specific
+# -----------------------------------
+
+/cache/
+/store/
+surreal
+history.txt
+/doc/tla/states/
+/profiling/traces/
+
+surrealism/test/demo.surli
+surrealism/test/surrealism
+

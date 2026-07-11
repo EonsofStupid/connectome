@@ -1,0 +1,634 @@
+name: CI
+
+run-name: "CI run '${{ github.head_ref || github.ref_name }}'"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "releases/*"
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+  merge_group:
+
+concurrency:
+  # Use github.run_id on main branch
+  # Use github.event.pull_request.number on pull requests, so it's unique per pull request
+  # Use github.ref on other branches, so it's unique per branch
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+# sccache → S3 backend (a drop-in replacement for the former Depot Cache).
+# Set at workflow level so the values are in the environment when the
+# sccache-action daemon starts (it reads its backend config at start time).
+# Fork PRs have no secrets, so SCCACHE_BUCKET is empty there and sccache
+# transparently falls back to a local cache — builds still succeed, just
+# without the shared cache (the same behaviour forks had under Depot).
+env:
+  SCCACHE_BUCKET: ${{ secrets.AWS_S3_SCCACHE_BUCKET_NAME }}
+  SCCACHE_REGION: us-east-1
+  SCCACHE_S3_KEY_PREFIX: ${{ github.repository }} # scope cache to this repo
+  SCCACHE_IDLE_TIMEOUT: "0" # don't let the daemon exit mid-compile
+  AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
+
+jobs:
+  # ----------------------------------------
+  # Server build
+  # ----------------------------------------
+
+  build:
+    name: Build binary (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - name: amd64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest-4-cores
+          - name: arm64
+            target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest-arm-4-cores
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          free-disk-space: "true"
+
+      - name: Build binary
+        run: cargo build --target ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # (Actions must be pinned by commit hash) v7.0.0
+        with:
+          name: surreal-${{ matrix.name }}
+          path: target/${{ matrix.target }}/debug/surreal
+
+  # ----------------------------------------
+  # Code quality checks
+  # ----------------------------------------
+
+  format:
+    name: Check format
+    runs-on: ubuntu-latest-4-cores
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Lookup the nightly toolchain
+        id: info
+        run: |
+          set -x
+          echo "toolchain=$(cat rust-toolchain.nightly)" >> $GITHUB_OUTPUT
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          toolchain: ${{ steps.info.outputs.toolchain }}
+          components: rustfmt
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          enable-sccache: "false"
+          free-disk-space: "true"
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+
+      - name: Check format
+        run: cargo make ci-fmt
+
+  clippy:
+    name: Check clippy
+    runs-on: ubuntu-latest-4-cores
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          components: clippy
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          free-disk-space: "true"
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+
+      - name: Run clippy
+        run: cargo make ci-clippy
+
+  clippy-release:
+    name: Check clippy (release)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest-4-cores
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          components: clippy
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          free-disk-space: "true"
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+
+      - name: Run clippy release
+        run: cargo make ci-clippy-release
+
+  check-release:
+    name: Check workspace (release)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest-4-cores
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          free-disk-space: "true"
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+
+      - name: Check workspace release
+        run: cargo make ci-check-release
+
+  check-msrv:
+    name: Check workspace (MSRV)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest-4-cores
+    env:
+      msrv: "1.95" # This should be updated if the MSRV is updated.
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          toolchain: ${{ env.msrv }}
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          enable-sccache: "false"
+          free-disk-space: "true"
+
+      - name: Install cargo-make
+        run: cargo +${{ env.msrv }} install --debug --locked cargo-make
+
+      - name: Check workspace on MSRV
+        run: cargo +${{ env.msrv }} make ci-check
+
+  check-wasm:
+    name: Check Wasm
+    runs-on: ubuntu-latest-4-cores
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          targets: wasm32-unknown-unknown
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          free-disk-space: "true"
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+
+      - name: Check wasm
+        run: cargo make ci-check-wasm
+
+  check-revision:
+    name: Check revision
+    runs-on: ubuntu-latest-4-cores
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          enable-sccache: "false"
+          free-disk-space: "true"
+
+      - name: Install revision-lock
+        run: cargo install revision-lock --version 0.2.0 --locked
+
+      - name: Check revision.lock
+        run: revision-lock --check
+
+  check-docs:
+    name: Check docs
+    runs-on: ubuntu-latest-4-cores
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          free-disk-space: "true"
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+
+      - name: Check docs
+        run: cargo make ci-docs
+
+  feature-check:
+    name: Check feature combinations
+    runs-on: ubuntu-latest-4-cores
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          enable-sccache: "false"
+          free-disk-space: "true"
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+
+      - name: Install cargo-hack
+        run: cargo install cargo-hack
+
+      - name: Check feature combinations
+        run: cargo make ci-feature-check
+
+  unused-deps:
+    name: Check unused dependencies
+    runs-on: ubuntu-latest-4-cores
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          enable-sccache: "false"
+          free-disk-space: "true"
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+
+      - name: Install cargo-machete
+        run: cargo install cargo-machete
+
+      - name: Check unused dependencies
+        run: cargo make ci-unused-deps
+
+  # ----------------------------------------
+  # Integration tests
+  # ----------------------------------------
+
+  integration-tests:
+    name: Integration tests
+    # Runs the `ml_integration` tests, which initialize ONNX Runtime at runtime;
+    # that works on the stock GitHub-hosted Ubuntu image.
+    runs-on: ubuntu-latest-4-cores
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          free-disk-space: "true"
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+        with:
+          preset: test
+
+      - name: Run integration tests
+        run: cargo make ci-integration-all
+
+      - name: sccache stats
+        if: success() || failure()
+        run: sccache -s || true
+
+  # ----------------------------------------
+  # Workspace tests
+  # ----------------------------------------
+
+  test:
+    name: Test workspace
+    # Runs on an ephemeral GitHub-hosted runner so PR code never runs on
+    # self-hosted org infra.
+    runs-on: ubuntu-latest-4-cores
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Test workspace
+        uses: ./.github/actions/test-workspace
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          free-disk-space: "true"
+
+  # ----------------------------------------
+  # Storage engine tests
+  # ----------------------------------------
+
+  kvs-engines:
+    name: KVS - ${{ matrix.engine }} engine
+    runs-on: ubuntu-latest-4-cores
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [mem, rocksdb, surrealkv, tikv]
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          cache-key: kvs
+          free-disk-space: "true"
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+        with:
+          tools: cargo-nextest,cargo-make
+
+      - name: Setup databases
+        uses: ./.github/actions/setup-databases
+        with:
+          tikv: ${{ matrix.engine == 'tikv' }}
+
+      - name: Test engine
+        run: cargo make ci-kvs-${{ matrix.engine }}
+
+  # ----------------------------------------
+  # Rust SDK tests
+  # ----------------------------------------
+
+  sdk-build:
+    name: Test SDK build
+    runs-on: ubuntu-latest-4-cores
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          free-disk-space: "true"
+
+      - name: Build local
+        working-directory: tests/sdk/local
+        run: cargo build
+
+      - name: Build remote
+        working-directory: tests/sdk/remote
+        run: cargo build
+
+  sdk-engines:
+    name: Rust SDK - ${{ matrix.engine }} engine
+    runs-on: ubuntu-latest-4-cores
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [any, ws, http, mem, rocksdb, surrealkv, tikv]
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          # Engine-independent deps (see kvs-engines) — one shared cache key.
+          cache-key: sdk
+          free-disk-space: "true"
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+        with:
+          tools: cargo-nextest,cargo-make
+
+      - name: Setup databases
+        uses: ./.github/actions/setup-databases
+        with:
+          tikv: ${{ matrix.engine == 'tikv' }}
+
+      - name: Test engine
+        run: cargo make ci-api-integration-${{ matrix.engine }}
+
+  # ----------------------------------------
+  # SurrealQL language tests
+  # ----------------------------------------
+
+  lang-tests:
+    name: SurrealQL tests - ${{ matrix.engine }}
+    runs-on: ubuntu-latest-4-cores
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [mem, surrealkv, rocksdb, tikv]
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: language-tests
+          # Engine-independent deps (see kvs-engines) — one shared cache key.
+          cache-key: lang
+          free-disk-space: "true"
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+        with:
+          tools: ${{ matrix.engine == 'mem' && 'cargo-make,cargo-llvm-cov' || 'cargo-make' }}
+
+      - name: Setup databases
+        uses: ./.github/actions/setup-databases
+        with:
+          tikv: ${{ matrix.engine == 'tikv' }}
+
+      - name: Run language tests
+        continue-on-error: ${{ matrix.engine == 'tikv' }}
+        if: matrix.engine != 'mem'
+        run: cargo make ci-lang-test-${{ matrix.engine }}
+
+      - name: Run language tests with coverage
+        if: matrix.engine == 'mem'
+        run: cargo make ci-lang-test-coverage
+
+      - name: Upload language test coverage to Codecov
+        if: matrix.engine == 'mem'
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # (Actions must be pinned by commit hash) v6.0.0
+        with:
+          files: language-tests-lcov.info
+          fail_ci_if_error: false
+          flags: language-tests
+          name: language-test-coverage
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # ----------------------------------------
+  # SurrealQL language upgrade tests
+  # ----------------------------------------
+
+  lang-upgrade-tests:
+    name: SurrealQL upgrade tests - ${{ matrix.engine }}
+    runs-on: ubuntu-latest-4-cores
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [surrealkv, rocksdb]
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup environment
+        uses: ./.github/actions/setup-environment
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          # Both workspaces are cached: `language-tests` for the test harness,
+          # and the root workspace because the final `..` hop builds the
+          # current checkout's surreal binary via cargo.
+          workspaces: |
+            language-tests
+            .
+          # Engine-independent deps (see kvs-engines) — one shared cache key.
+          cache-key: lang-upgrade
+          free-disk-space: "true"
+
+      - name: Resolve upgrade version chain
+        id: vers
+        run: |
+          # Extract the comma-separated chain, then translate commas to '_' so
+          # the value is usable inside an `actions/cache` key (which forbids
+          # commas).
+          chain=$(grep -E '^LANG_UPGRADE_VERSIONS = ' Makefile.ci.toml \
+            | sed -E 's/.*value = "([^"]+)".*/\1/' \
+            | tr ',' '_')
+          echo "chain=$chain" >> "$GITHUB_OUTPUT"
+
+      - name: Cache upgrade binaries
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # (Actions must be pinned by commit hash) v4.2.3
+        with:
+          # Pre-built surreal-vX.Y.Z tarballs from download.surrealdb.com.
+          # Release tarballs are immutable, so stale-key restores are safe.
+          path: language-tests/.binary_cache
+          key: lang-upgrade-binaries-v1-${{ runner.os }}-${{ steps.vers.outputs.chain }}
+          restore-keys: |
+            lang-upgrade-binaries-v1-${{ runner.os }}-
+
+      - name: Install tools
+        uses: ./.github/actions/install-tools
+        with:
+          tools: cargo-make
+
+      - name: Run language upgrade tests
+        run: cargo make ci-lang-upgrade-test-${{ matrix.engine }}
+
+  # ----------------------------------------
+  # Required checks
+  # ----------------------------------------
+
+  required-checks:
+    name: Required checks
+    runs-on: ubuntu-latest-4-cores
+    if: success() || failure()
+    needs:
+      # Server build
+      - build
+      # Quality checks
+      - format
+      - clippy
+      - clippy-release
+      - check-release
+      - check-msrv
+      - check-wasm
+      - check-revision
+      - check-docs
+      - feature-check
+      - unused-deps
+      # Integration tests
+      - integration-tests
+      # Workspace tests
+      - test
+      # SDK tests
+      - sdk-build
+      - sdk-engines
+      # KVS tests
+      - kvs-engines
+      # SurrealQL language tests
+      - lang-tests
+      - lang-upgrade-tests
+    steps:
+      - name: Check for failures
+        run: |
+          echo "Checking results of all required jobs..."
+
+          # List of all job results
+          results=(
+            "${{ needs.build.result }}"
+            "${{ needs.format.result }}"
+            "${{ needs.clippy.result }}"
+            "${{ needs.clippy-release.result }}"
+            "${{ needs.check-release.result }}"
+            "${{ needs.check-msrv.result }}"
+            "${{ needs.check-wasm.result }}"
+            "${{ needs.check-revision.result }}"
+            "${{ needs.check-docs.result }}"
+            "${{ needs.feature-check.result }}"
+            "${{ needs.unused-deps.result }}"
+            "${{ needs.integration-tests.result }}"
+            "${{ needs.test.result }}"
+            "${{ needs.sdk-build.result }}"
+            "${{ needs.sdk-engines.result }}"
+            "${{ needs.kvs-engines.result }}"
+            "${{ needs.lang-tests.result }}"
+            "${{ needs.lang-upgrade-tests.result }}"
+          )
+
+          # Check if any job failed (skipped is ok for conditional jobs)
+          failed=false
+          for result in "${results[@]}"; do
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "❌ A required job had result: $result"
+              failed=true
+            fi
+          done
+
+          if [[ "$failed" == "true" ]]; then
+            echo "❌ One or more required checks failed"
+            exit 1
+          else
+            echo "✅ All required CI checks have passed successfully!"
+          fi

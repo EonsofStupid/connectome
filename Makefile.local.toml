@@ -1,0 +1,131 @@
+[env]
+RUSTFLAGS = { value = "-D warnings --cfg tokio_unstable", condition = { env_not_set = [
+    "RUSTFLAGS",
+] } }
+
+[tasks.default]
+category = "LOCAL USAGE"
+description = "List all available tasks"
+clear = true
+command = "cargo"
+args = ["make", "--list-all-steps"]
+
+[tasks.docs]
+category = "LOCAL USAGE"
+description = "Generate and open the SurrealDB documentation"
+command = "cargo"
+args = [
+    "doc",
+    "--open",
+    "--no-deps",
+    "--package",
+    "surrealdb",
+    "--features",
+    "rustls,native-tls,protocol-ws,protocol-http,kv-mem,kv-rocksdb,kv-tikv,http,scripting,jwks",
+]
+
+[tasks.fmt]
+category = "LOCAL USAGE"
+description = "Format the SurrealDB source code according to the project rules"
+toolchain = "${SURREAL_NIGHTLY_RUST_TOOLCHAIN}"
+command = "cargo"
+args = ["fmt", "--all"]
+
+[tasks.check]
+category = "LOCAL USAGE"
+description = "Run the SurrealDB code quality checks"
+env = { ALL_FEATURES = "${FAST_FEATURES}" }
+script_runner = "@shell"
+script = "cargo make fmt && cargo make ci-clippy"
+
+[tasks.serve]
+category = "LOCAL USAGE"
+description = "Start the SurrealDB database server in debug mode"
+command = "cargo"
+args = [
+    "run",
+    "--profile",
+    "make",
+    "--no-default-features",
+    "--features",
+    "${DEV_FEATURES}",
+    "--",
+    "start",
+    "--allow-all",
+    "--deny-guests",
+    "${@}",
+]
+
+[tasks.sql]
+category = "LOCAL USAGE"
+description = "Run the SurrealDB SQL shell with pretty printing"
+command = "cargo"
+env = { SURREAL_LOG = "error" }
+args = [
+    "run",
+    "--profile",
+    "make",
+    "--no-default-features",
+    "--features",
+    "${DEV_FEATURES}",
+    "--",
+    "sql",
+    "--pretty",
+    "${@}",
+]
+
+[tasks.repl]
+category = "LOCAL USAGE"
+description = "Run the SurrealDB SQL REPL with a default namespace and database"
+command = "cargo"
+env = { SURREAL_LOG = "error" }
+args = [
+    "run",
+    "--profile",
+    "make",
+    "--no-default-features",
+    "--features",
+    "${DEV_FEATURES}",
+    "--",
+    "sql",
+    "--pretty",
+	"--endpoint",
+    "memory",
+    "--ns",
+    "main",
+    "--db",
+    "main",
+    "${@}",
+]
+
+[tasks.build]
+category = "LOCAL USAGE"
+description = "Build the SurrealDB database server in debug mode"
+command = "cargo"
+args = [
+    "build",
+    "--profile",
+    "make",
+    "${@}",
+]
+
+[tasks.release]
+category = "LOCAL USAGE"
+description = "Build the SurrealDB database server in release mode"
+command = "cargo"
+args = [
+    "build",
+    "--release",
+    "${@}",
+]
+
+[tasks.profile]
+category = "LOCAL USAGE"
+description = "Build the SurrealDB database server with the `profiling` profile (release optimisations + symbols, no strip). Same default features as `cargo make release` — both inherit the root crate's `default` from Cargo.toml. Binary lands at target/profiling/surreal; use for `sample`, `perf`, flamegraphs, etc."
+command = "cargo"
+args = [
+    "build",
+    "--profile",
+    "profiling",
+    "${@}",
+]
