@@ -56,6 +56,17 @@ impl DefineIndexStatement {
 	) -> Result<Value> {
 		// Allowed to run?
 		ctx.is_allowed(opt, Action::Edit, ResourceKind::Index, Base::Db)?;
+		// connectome: native vector indexing is excised — recall is served by the merged-in
+		// TotalRecall engine. Reject HNSW/DiskANN index creation at the source (this also
+		// neutralizes every downstream index-backed KNN path, since no such index can exist).
+		#[cfg(not(feature = "vector-index"))]
+		if matches!(self.index, Index::Hnsw(_) | Index::DiskAnn(_)) {
+			bail!(Error::Query {
+				message:
+					"vector indexing is disabled in connectome; recall is served by TotalRecall"
+						.to_string(),
+			});
+		}
 		// Fetch the transaction
 		let txn = ctx.tx();
 

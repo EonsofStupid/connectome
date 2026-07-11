@@ -26,9 +26,12 @@ default = [
     "http",
     "surrealism",
     "graphql",
+    "vector-index",
     "cli",
 ]
 http = ["surrealdb-core/http"]
+# connectome: native vector indexing (surfaces surrealdb-core/vector-index).
+vector-index = ["surrealdb-core/vector-index"]
 jwks = ["surrealdb-core/jwks"]
 # Build against AWS-LC FIPS 3.0.x (NIST CMVP cert #4816).
 # Restricts TLS to FIPS-approved cipher suites at runtime.

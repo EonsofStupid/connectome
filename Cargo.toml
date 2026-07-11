@@ -259,10 +259,31 @@ default = [
     "surrealism",
     "graphql",
     "mcp",
+    "vector-index",
+    "cli",
+]
+
+# connectome production build: every default feature EXCEPT vector-index.
+# Build with: cargo build --release --no-default-features --features connectome-production
+# HNSW/DiskANN/KNN then reject at execution — the vector organ is TotalRecall.
+connectome-production = [
+    "allocator",
+    "allocation-tracking",
+    "storage-mem",
+    "storage-surrealkv",
+    "storage-rocksdb",
+    "storage-tikv",
+    "scripting",
+    "http",
+    "surrealism",
+    "graphql",
+    "mcp",
     "cli",
 ]
 
 allocator = ["surrealdb-server/allocator"]
+# connectome: native vector indexing (surfaces surrealdb-server/vector-index).
+vector-index = ["surrealdb-server/vector-index"]
 allocation-tracking = ["surrealdb-server/allocation-tracking"]
 http = ["surrealdb-server/http"]
 jwks = ["surrealdb-server/jwks"]

@@ -1361,6 +1361,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "connectome"
+version = "3.1.5"
+dependencies = [
+ "assert_fs",
+ "chrono",
+ "ciborium",
+ "futures",
+ "futures-util",
+ "http",
+ "jsonwebtoken",
+ "nix 0.30.1",
+ "rand 0.9.4",
+ "rcgen",
+ "reqwest 0.13.3",
+ "semver",
+ "serde",
+ "serde_json",
+ "surrealdb",
+ "surrealdb-core",
+ "surrealdb-server",
+ "surrealdb-types",
+ "surrealism-runtime",
+ "tempfile",
+ "test-log",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite 0.28.0",
+ "tracing",
+ "ulid",
+ "uuid",
+ "web-time",
+]
+
+[[package]]
 name = "console"
 version = "0.15.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7001,41 +7036,6 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
-
-[[package]]
-name = "surreal"
-version = "3.1.5"
-dependencies = [
- "assert_fs",
- "chrono",
- "ciborium",
- "futures",
- "futures-util",
- "http",
- "jsonwebtoken",
- "nix 0.30.1",
- "rand 0.9.4",
- "rcgen",
- "reqwest 0.13.3",
- "semver",
- "serde",
- "serde_json",
- "surrealdb",
- "surrealdb-core",
- "surrealdb-server",
- "surrealdb-types",
- "surrealism-runtime",
- "tempfile",
- "test-log",
- "thiserror 2.0.18",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite 0.28.0",
- "tracing",
- "ulid",
- "uuid",
- "web-time",
-]
 
 [[package]]
 name = "surrealdb"

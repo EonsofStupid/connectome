@@ -18,7 +18,9 @@ bench-remote-store = ["bench","tokio-tungstenite", "tokio-tungstenite/native-tls
 
 [dependencies]
 # Crates for running surrealdb.
-surrealdb-core = { path = "../surrealdb/core", default-features = false, features = ["scripting", "kv-mem"] }
+# connectome: `vector-index` enabled so the upstream knn/hnsw/diskann language-tests exercise
+# the native vector path (the bench / vector-ON shape). Production ships vector-OFF.
+surrealdb-core = { path = "../surrealdb/core", default-features = false, features = ["scripting", "kv-mem", "vector-index"] }
 surrealdb-types = { path = "../surrealdb/types" }
 reblessive = { version = "0.4.3" }
 rust_decimal = { version = "1.41.0", features = ["maths", "serde-str"] }

@@ -155,7 +155,23 @@ impl PhysicalExpr for BinaryOp {
 				// KnnScan (HNSW) or KnnTopK (brute-force). KNN operators are
 				// stripped via strip_knn_from_condition before physical expression
 				// compilation, so this is a defensive fallback only.
-				BinaryOperator::NearestNeighbor(_) => Value::Bool(true),
+				BinaryOperator::NearestNeighbor(_) => {
+					// connectome: when native vector indexing is excised, the planner guards
+					// (define/index.rs, select planner, tree.rs) reject KNN before physical
+					// evaluation — so this arm is unreachable. Fail LOUD if one ever slips
+					// through, rather than silently passing every row (Value::Bool(true)).
+					#[cfg(not(feature = "vector-index"))]
+					{
+						return Err(anyhow::anyhow!(
+							"vector indexing is disabled in connectome; recall is served by TotalRecall"
+						)
+						.into());
+					}
+					#[cfg(feature = "vector-index")]
+					{
+						Value::Bool(true)
+					}
+				}
 			})
 		})
 	}

@@ -15,7 +15,7 @@ license-file.workspace = true
 
 [features]
 # Public features
-default = ["kv-mem", "graphql"]
+default = ["kv-mem", "graphql", "vector-index"]
 kv-mem = [
     "dep:surrealmx",
     "tokio/time",
@@ -56,6 +56,13 @@ arbitrary = [
     "surrealdb-strand/arbitrary",
 ]
 allocation-tracking = []
+
+# connectome: native vector indexing (HNSW / DiskANN / KNN execution).
+# Default-ON so upstream tests + diff-based syncs stay shaped. The connectome
+# production build (`--no-default-features --features connectome-production`)
+# omits it: DEFINE INDEX … HNSW|DISKANN and the KNN operators then reject at
+# execution, because recall is served by the merged-in TotalRecall engine.
+vector-index = []
 
 # GraphQL support
 graphql = ["dep:async-graphql"]
