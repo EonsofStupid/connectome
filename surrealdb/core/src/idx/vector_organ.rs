@@ -15,9 +15,9 @@
 //! the wiring is proven first on the exact segment.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{Context as _, Result};
 use segment::data_types::query_context::QueryContext;
@@ -250,6 +250,77 @@ impl Drop for VectorOrgan {
     }
 }
 
+/// Process-local cache of open `VectorOrgan`s, keyed by index identity — mirrors SurrealDB's
+/// `IndexStores::get_index_hnsw` (`idx/trees/store/hnsw.rs`). The KNN reroute (increment 2) and the
+/// DEFINE-INDEX build (increment 4) both fetch the organ for an index through here, so a segment is opened
+/// once and shared. The on-disk dir is derived deterministically from the datastore path + index identity,
+/// per `docs/MERGE_WIRING_SPEC.md` §4: `<base>/trecall/<ns>_<db>_<table>_<index_id>/`.
+#[derive(Default)]
+pub struct VectorOrganStore {
+    organs: RwLock<HashMap<String, Arc<VectorOrgan>>>,
+}
+
+impl VectorOrganStore {
+    /// The deterministic on-disk dir for one index's segment under the datastore `base`.
+    pub fn organ_dir(base: &Path, ns: &str, db: &str, table: &str, index_id: u64) -> PathBuf {
+        base.join("trecall").join(format!("{ns}_{db}_{table}_{index_id}"))
+    }
+
+    fn key(ns: &str, db: &str, table: &str, index_id: u64) -> String {
+        format!("{ns}/{db}/{table}/{index_id}")
+    }
+
+    /// Get the cached organ for an index, or open-or-build it at its derived dir (dimension `dim`). Idempotent
+    /// — the same index returns the same shared `VectorOrgan`.
+    ///
+    /// # Errors
+    /// On lock poison or a segment open failure.
+    pub fn get_or_open(
+        &self,
+        base: &Path,
+        ns: &str,
+        db: &str,
+        table: &str,
+        index_id: u64,
+        dim: usize,
+    ) -> Result<Arc<VectorOrgan>> {
+        let key = Self::key(ns, db, table, index_id);
+        if let Some(organ) = self
+            .organs
+            .read()
+            .map_err(|e| anyhow::anyhow!("vector-organ store lock: {e}"))?
+            .get(&key)
+            .cloned()
+        {
+            return Ok(organ);
+        }
+        let mut w = self.organs.write().map_err(|e| anyhow::anyhow!("vector-organ store lock: {e}"))?;
+        // Re-check under the write lock (another thread may have opened it).
+        if let Some(organ) = w.get(&key).cloned() {
+            return Ok(organ);
+        }
+        let dir = Self::organ_dir(base, ns, db, table, index_id);
+        let organ = Arc::new(VectorOrgan::open(&dir, dim)?);
+        w.insert(key, Arc::clone(&organ));
+        Ok(organ)
+    }
+
+    /// Evict an index's organ from the cache (process-local; mirrors `remove_hnsw_index`). Flushes on drop of
+    /// the last `Arc`. Returns whether an entry was present.
+    ///
+    /// # Errors
+    /// On lock poison.
+    pub fn evict(&self, ns: &str, db: &str, table: &str, index_id: u64) -> Result<bool> {
+        let key = Self::key(ns, db, table, index_id);
+        Ok(self
+            .organs
+            .write()
+            .map_err(|e| anyhow::anyhow!("vector-organ store lock: {e}"))?
+            .remove(&key)
+            .is_some())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +359,36 @@ mod tests {
         assert_eq!(hits.first().map(|h| h.0.as_str()), Some("rec:a"), "survives reopen");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Store gate: same index → same shared organ; distinct index → distinct organ; dir derivation; evict.
+    #[test]
+    fn store_caches_by_index_identity() {
+        let base = std::env::temp_dir().join(format!("vorg-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let store = VectorOrganStore::default();
+
+        // deterministic dir derivation
+        let d = VectorOrganStore::organ_dir(&base, "clyffy", "connectome", "memory", 7);
+        assert!(d.ends_with("trecall/clyffy_connectome_memory_7"), "dir derived from index identity: {d:?}");
+
+        // same identity → same shared Arc (opened once)
+        let a1 = store.get_or_open(&base, "clyffy", "connectome", "memory", 7, 4).expect("open a");
+        let a2 = store.get_or_open(&base, "clyffy", "connectome", "memory", 7, 4).expect("get a");
+        assert!(Arc::ptr_eq(&a1, &a2), "same index returns the same cached organ");
+
+        // distinct index → distinct organ
+        let b = store.get_or_open(&base, "clyffy", "connectome", "memory", 8, 4).expect("open b");
+        assert!(!Arc::ptr_eq(&a1, &b), "different index → different organ");
+
+        // the shared organ actually works
+        a1.upsert("rec:x", &[1.0, 0.0, 0.0, 0.0]).expect("upsert via store organ");
+        assert_eq!(a2.search(&[1.0, 0.0, 0.0, 0.0], 1).expect("search")[0].0, "rec:x", "shared instance");
+
+        // evict
+        assert!(store.evict("clyffy", "connectome", "memory", 7).expect("evict"), "evicted present entry");
+        assert!(!store.evict("clyffy", "connectome", "memory", 7).expect("evict"), "already gone");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
