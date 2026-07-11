@@ -68,7 +68,7 @@ vector-index = []
 # so DEFINE INDEX builds a TotalRecall segment and KNN executes through it in-process.
 # Off by default (additive; keeps upstream syncs clean). This is the vector ORGAN that
 # plugs into the sockets `vector-index` exposes when OFF.
-vector-organ = ["dep:segment"]
+vector-organ = ["dep:segment", "dep:segment-common", "uuid/v5"]
 
 # GraphQL support
 graphql = ["dep:async-graphql"]
@@ -91,6 +91,9 @@ surrealml-core = { workspace = true, optional = true }
 # cargo resolves segment's workspace hermetically in its cache, avoiding the same-tree `workspace = true`
 # inheritance ambiguity. geo pinned 0.32 on both sides so it co-compiles with one geo (operator groundwork).
 segment = { git = "https://github.com/EonsofStupid/totalrecall", rev = "0c5cba5b873a8973836fe43a659544c155068594", optional = true }
+# `common` (TotalRecall's) provides HardwareCounterCell / HwMeasurementAcc that every segment upsert/search
+# needs. Same repo + rev as `segment` so cargo unifies one copy.
+segment-common = { package = "common", git = "https://github.com/EonsofStupid/totalrecall", rev = "0c5cba5b873a8973836fe43a659544c155068594", optional = true }
 
 affinitypool = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
