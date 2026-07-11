@@ -27,6 +27,9 @@ members = [
     # Other
     "profiling",
 ]
+# connectome A3: TotalRecall (Qdrant-lineage fork) is consumed as a GIT DEPENDENCY of surrealdb-core
+# (behind the `vector-organ` feature) — cargo resolves its workspace hermetically from the remote, so
+# no vendored submodule / workspace exclude is needed here. See surrealdb/core/Cargo.toml.
 
 [workspace.package]
 authors = ["Tobie Morgan Hitchcock <tobie@surrealdb.com>"]

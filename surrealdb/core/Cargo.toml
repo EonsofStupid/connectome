@@ -64,6 +64,12 @@ allocation-tracking = []
 # execution, because recall is served by the merged-in TotalRecall engine.
 vector-index = []
 
+# connectome A3 (THE MERGE): compile TotalRecall's `segment` engine INTO surrealdb-core
+# so DEFINE INDEX builds a TotalRecall segment and KNN executes through it in-process.
+# Off by default (additive; keeps upstream syncs clean). This is the vector ORGAN that
+# plugs into the sockets `vector-index` exposes when OFF.
+vector-organ = ["dep:segment"]
+
 # GraphQL support
 graphql = ["dep:async-graphql"]
 
@@ -79,6 +85,12 @@ surrealdb-strand = { workspace = true }
 surrealmx = { workspace = true, optional = true }
 surrealkv = { workspace = true, optional = true }
 surrealml-core = { workspace = true, optional = true }
+
+# connectome A3: TotalRecall's embeddable vector engine (Qdrant-lineage `segment` crate), compiled
+# in-process as the vector ORGAN behind the `vector-organ` feature. GIT dep (not same-tree path dep):
+# cargo resolves segment's workspace hermetically in its cache, avoiding the same-tree `workspace = true`
+# inheritance ambiguity. geo pinned 0.32 on both sides so it co-compiles with one geo (operator groundwork).
+segment = { git = "https://github.com/EonsofStupid/totalrecall", rev = "0c5cba5b873a8973836fe43a659544c155068594", optional = true }
 
 affinitypool = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }

@@ -3,6 +3,9 @@ pub(crate) mod index;
 pub mod planner;
 pub(super) mod seqdocids;
 pub mod trees;
+/// connectome A3: TotalRecall's `segment` engine compiled in-process (the vector organ).
+#[cfg(feature = "vector-organ")]
+pub mod vector_organ;
 
 use std::borrow::Cow;
 use std::fmt::{Debug, Display};
