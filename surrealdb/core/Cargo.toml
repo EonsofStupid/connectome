@@ -61,7 +61,7 @@ allocation-tracking = []
 # Default-ON so upstream tests + diff-based syncs stay shaped. The connectome
 # production build (`--no-default-features --features connectome-production`)
 # omits it: DEFINE INDEX … HNSW|DISKANN and the KNN operators then reject at
-# execution, because recall is served by the merged-in TotalRecall engine.
+# RETIRED split. Do not treat this as a second engine.
 vector-index = []
 
 # GraphQL support

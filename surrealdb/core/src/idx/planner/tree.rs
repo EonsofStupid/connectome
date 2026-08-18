@@ -237,11 +237,11 @@ impl<'a> TreeBuilder<'a> {
 				// connectome: native KNN is excised (see define/index.rs). This is the legacy
 				// planner's universal Binary chokepoint (SELECT fallback + UPDATE/DELETE/
 				// CREATE/UPSERT); reject the NearestNeighbor operator here before any
-				// brute-force / index-backed KNN evaluation. Recall is served by TotalRecall.
+				// retired split tree — do not resume TotalRecall as a second product
 				#[cfg(not(feature = "vector-index"))]
 				if matches!(op, BinaryOperator::NearestNeighbor(_)) {
 					anyhow::bail!(
-						"vector indexing is disabled in connectome; recall is served by TotalRecall"
+						"retired split tree; use the fused QORTEX engine, not a second recall product"
 					);
 				}
 				// Did we already compute the same expression?

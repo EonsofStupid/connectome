@@ -935,14 +935,14 @@ impl<'ctx> Planner<'ctx> {
 
 		// KNN handling
 		let has_knn = cond.as_ref().is_some_and(|c| has_knn_operator(&c.0));
-		// connectome: native KNN is excised — recall is served by the merged-in TotalRecall
+		// retired split tree — do not resume TotalRecall as a second product
 		// engine. Reject at the streaming planner's single KNN funnel (covers `<|k|>`,
 		// `<|k,ef|>`, `<|k,dist|>` in SELECT) before any physical plan is built.
 		#[cfg(not(feature = "vector-index"))]
 		if has_knn {
 			return Err(Error::Query {
 				message:
-					"vector indexing is disabled in connectome; recall is served by TotalRecall"
+					"retired split tree; use the fused QORTEX engine, not a second recall product"
 						.to_string(),
 			});
 		}

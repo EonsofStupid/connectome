@@ -265,7 +265,7 @@ default = [
 
 # connectome production build: every default feature EXCEPT vector-index.
 # Build with: cargo build --release --no-default-features --features connectome-production
-# HNSW/DiskANN/KNN then reject at execution — the vector organ is TotalRecall.
+# RETIRED split feature. Do not treat this as a second engine.
 connectome-production = [
     "allocator",
     "allocation-tracking",

@@ -57,13 +57,13 @@ impl DefineIndexStatement {
 		// Allowed to run?
 		ctx.is_allowed(opt, Action::Edit, ResourceKind::Index, Base::Db)?;
 		// connectome: native vector indexing is excised — recall is served by the merged-in
-		// TotalRecall engine. Reject HNSW/DiskANN index creation at the source (this also
+		// retired split tree — do not resume TotalRecall as a second product
 		// neutralizes every downstream index-backed KNN path, since no such index can exist).
 		#[cfg(not(feature = "vector-index"))]
 		if matches!(self.index, Index::Hnsw(_) | Index::DiskAnn(_)) {
 			bail!(Error::Query {
 				message:
-					"vector indexing is disabled in connectome; recall is served by TotalRecall"
+					"retired split tree; use the fused QORTEX engine, not a second recall product"
 						.to_string(),
 			});
 		}

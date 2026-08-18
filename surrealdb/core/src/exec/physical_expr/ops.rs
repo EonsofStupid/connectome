@@ -163,7 +163,7 @@ impl PhysicalExpr for BinaryOp {
 					#[cfg(not(feature = "vector-index"))]
 					{
 						return Err(anyhow::anyhow!(
-							"vector indexing is disabled in connectome; recall is served by TotalRecall"
+							"retired split tree; use the fused QORTEX engine, not a second recall product"
 						)
 						.into());
 					}
